@@ -1,0 +1,46 @@
+[package]
+name = "opendeck-masterhub"
+version = "0.6.2"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+ab_glyph = "0.2"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp"] }
+imageproc = { version = "0.25", default-features = false }
+log = "0.4"
+openaction = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+simplelog = "0.12"
+tokio = { version = "1", features = ["full"] }
+ureq = "2"
+
+[target.'cfg(windows)'.dependencies]
+hidapi = "2"
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_System_Com",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+
+# Linux: hidraw bez systemowej libudev (nie trzeba nic doinstalowywa?? do kompilacji).
+[target.'cfg(target_os = "linux")'.dependencies]
+hidapi = { version = "2", default-features = false, features = ["linux-native-basic-udev"] }
+enigo = { version = "0.2", default-features = false, features = ["x11rb"] }
+
+# macOS: tryb wsp????dzielony ??? plugin otwiera ka??dy modu?? dwa razy (odczyt i zapis).
+[target.'cfg(target_os = "macos")'.dependencies]
+hidapi = { version = "2", features = ["macos-shared-device"] }
+enigo = "0.2"
+
+[profile.release]
+strip = true

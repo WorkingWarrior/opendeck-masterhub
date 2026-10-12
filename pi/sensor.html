@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="pl">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="stylesheet" href="pi.css" />
+		<script>
+			// Lista czujników przychodzi z pluginu (sendToPropertyInspector) po otwarciu panelu.
+			let socket = null;
+			let context = null;
+			let settings = { sensor: "", label: "", decimals: -1, warn: null };
+			let sensors = [];
+			const $ = (id) => document.getElementById(id);
+			const KINDS = { Temperature: "temperatura", Load: "obciążenie", Power: "moc", Fan: "wentylator", Clock: "zegar", Voltage: "napięcie", Data: "dane", Control: "sterowanie" };
+
+			function fmt(s) {
+				return s.value === null ? "—" : `${Math.round(s.value * 10) / 10} ${s.unit}`;
+			}
+
+			function renderList() {
+				const select = $("sensor");
+				const filter = $("filter").value.trim().toLowerCase();
+				select.innerHTML = '<option value="">— wybierz —</option>';
+				const groups = {};
+				for (const s of sensors) {
+					const text = `${s.name} (${KINDS[s.kind] || s.kind.toLowerCase()}) – ${fmt(s)}`;
+					if (filter && !(s.hardware + " " + text).toLowerCase().includes(filter) && s.id !== settings.sensor) continue;
+					(groups[s.hardware] ||= []).push([s.id, text]);
+				}
+				for (const [hardware, items] of Object.entries(groups)) {
+					const group = document.createElement("optgroup");
+					group.label = hardware;
+					for (const [id, text] of items) group.appendChild(new Option(text, id));
+					select.appendChild(group);
+				}
+				select.value = settings.sensor;
+			}
+
+			function render() {
+				$("label").value = settings.label;
+				$("decimals").value = String(settings.decimals);
+				$("warn").value = settings.warn === null || settings.warn === undefined ? "" : String(settings.warn);
+			}
+
+			function send() {
+				if (socket && socket.readyState === 1) socket.send(JSON.stringify({ event: "setSettings", context, payload: settings }));
+			}
+
+			function pickSensor() {
+				const id = $("sensor").value;
+				const old = sensors.find((s) => s.id === settings.sensor);
+				settings.sensor = id;
+				// Etykieta podpowiadana z nazwy, jeśli użytkownik jej nie zmienił.
+				const s = sensors.find((x) => x.id === id);
+				if (s && (!settings.label || (old && settings.label === shortLabel(old)))) settings.label = shortLabel(s);
+				render();
+				send();
+			}
+
+			function shortLabel(s) {
+				const hw = s.hardware.toLowerCase();
+				const prefix = /nvidia|radeon|geforce|gpu/.test(hw) ? "GPU" : /intel core|ryzen|cpu/.test(hw) ? "CPU" : /memory/.test(hw) ? "RAM" : "";
+				const name = s.name.replace(/^(CPU|GPU)\s*/i, "");
+				return (prefix ? prefix + " " : "") + name.slice(0, 10);
+			}
+
+			function readOptions() {
+				settings.label = $("label").value;
+				settings.decimals = Number($("decimals").value);
+				const w = $("warn").value.replace(",", ".").trim();
+				settings.warn = w === "" || isNaN(Number(w)) ? null : Number(w);
+				send();
+			}
+
+			function connectElgatoStreamDeckSocket(port, uuid, registerEvent, info, actionInfo) {
+				actionInfo = JSON.parse(actionInfo);
+				context = actionInfo.context;
+				Object.assign(settings, actionInfo.payload.settings || {});
+				render();
+				socket = new WebSocket("ws://localhost:" + port);
+				socket.onopen = () => socket.send(JSON.stringify({ event: registerEvent, uuid }));
+				socket.onmessage = (msg) => {
+					const data = JSON.parse(msg.data);
+					if (data.event !== "sendToPropertyInspector") return;
+					if (data.payload.error) {
+						$("status").textContent = data.payload.error + " – uruchom LibreHardwareMonitor z włączonym serwerem WWW (port 8085).";
+						return;
+					}
+					sensors = data.payload.sensors || [];
+					$("status").textContent = `${sensors.length} czujników`;
+					renderList();
+				};
+			}
+
+			window.addEventListener("DOMContentLoaded", () => {
+				$("sensor").addEventListener("change", pickSensor);
+				$("filter").addEventListener("input", renderList);
+				for (const id of ["label", "decimals", "warn"]) $(id).addEventListener("change", readOptions);
+				render();
+			});
+		</script>
+	</head>
+	<body>
+		<div class="row">
+			<label for="filter">Szukaj</label>
+			<input id="filter" type="text" placeholder="np. temperatura, GPU, fan" />
+		</div>
+		<div class="row">
+			<label for="sensor">Czujnik</label>
+			<select id="sensor"></select>
+		</div>
+		<p class="hint" id="status">Wczytywanie listy czujników…</p>
+		<div class="row">
+			<label for="label">Etykieta</label>
+			<input id="label" type="text" placeholder="np. CPU" />
+		</div>
+		<div class="row">
+			<label for="decimals">Po przecinku</label>
+			<select id="decimals">
+				<option value="-1">Automatycznie</option>
+				<option value="0">0</option>
+				<option value="1">1</option>
+				<option value="2">2</option>
+			</select>
+		</div>
+		<div class="row">
+			<label for="warn">Ostrzeżenie od</label>
+			<input id="warn" type="text" placeholder="np. 85 (puste = wyłączone)" />
+		</div>
+		<p class="hint">Dane z LibreHardwareMonitor (http://127.0.0.1:8085), odświeżane co sekundę. Po przekroczeniu progu tło klawisza robi się czerwone. Wygląd tekstu zmienisz w edytorze tytułu OpenDecka.</p>
+	</body>
+</html>

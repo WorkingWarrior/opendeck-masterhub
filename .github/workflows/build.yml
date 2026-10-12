@@ -1,0 +1,74 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable
+      - run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-windows
+          path: target/release/opendeck-masterhub.exe
+
+  linux:
+    # Ubuntu 22.04 = glibc 2.35, so the binary also runs on older distributions.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable
+      - run: sh build-linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-linux
+          path: dist/bin/opendeck-masterhub-linux
+
+  macos:
+    runs-on: macos-latest
+    # Not tested on real hardware yet – a failing macOS build must not block the others.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable
+      - run: sh macos/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-macos
+          path: dist/bin/opendeck-masterhub-mac
+
+  package:
+    needs: [windows, linux, macos]
+    if: ${{ !cancelled() && needs.windows.result == 'success' && needs.linux.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bin-windows
+          path: target/release
+      - uses: actions/download-artifact@v4
+        with:
+          name: bin-linux
+          path: dist/bin
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: bin-macos
+          path: dist/bin
+      - run: python3 package.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: io.github.opendeck-masterhub.streamDeckPlugin
+          path: dist/io.github.opendeck-masterhub.streamDeckPlugin
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/io.github.opendeck-masterhub.streamDeckPlugin

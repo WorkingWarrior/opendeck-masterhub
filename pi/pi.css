@@ -1,0 +1,37 @@
+/* Prosty wygląd panelu ustawień, zbliżony do domyślnego w OpenDecku. */
+:root { color-scheme: dark; }
+body {
+	margin: 0;
+	padding: 8px 4px;
+	font: 13px "Segoe UI", system-ui, sans-serif;
+	color: #d8d8d8;
+	background: transparent;
+}
+.row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.row > label:first-child { flex: 0 0 110px; text-align: right; color: #a8a8a8; }
+.row > :not(label:first-child) { flex: 1; min-width: 0; }
+select, input[type="text"], input[type="number"] {
+	box-sizing: border-box;
+	width: 100%;
+	padding: 4px 6px;
+	border: 1px solid #3d3d3d;
+	border-radius: 4px;
+	background: #2d2d2d;
+	color: inherit;
+	font: inherit;
+}
+input[type="color"] { width: 48px; height: 26px; padding: 0; border: none; background: none; }
+input[type="range"] { width: 100%; accent-color: #7c3aed; }
+.value { flex: 0 0 36px !important; text-align: right; color: #a8a8a8; }
+.hint { margin: 2px 0 6px 118px; color: #8a8a8a; font-size: 12px; }
+button {
+	padding: 4px 10px;
+	border: 1px solid #3d3d3d;
+	border-radius: 4px;
+	background: #2d2d2d;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+button:hover { background: #3a3a3a; }
+.hidden { display: none !important; }

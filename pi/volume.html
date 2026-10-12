@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pl">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="stylesheet" href="pi.css" />
+		<script src="common.js"></script>
+		<script>
+			function onFormChange() {
+				document.getElementById("apps-row").classList.toggle("hidden", document.getElementById("target").value !== "apps");
+				document.getElementById("apps-hint").classList.toggle("hidden", document.getElementById("target").value !== "apps");
+				document.getElementById("step-value").textContent = document.getElementById("step").value + "%";
+			}
+		</script>
+	</head>
+	<body>
+		<div class="row">
+			<label for="target">Steruje</label>
+			<select id="target" data-key="target">
+				<option value="master">Głośność systemu</option>
+				<option value="mic">Mikrofon</option>
+				<option value="focused">Aktywne okno</option>
+				<option value="apps">Wybrane aplikacje</option>
+			</select>
+		</div>
+		<div class="row" id="apps-row">
+			<label for="apps">Aplikacje</label>
+			<input id="apps" data-key="apps" type="text" placeholder="spotify.exe, discord.exe" />
+		</div>
+		<p class="hint" id="apps-hint">Nazwy procesów oddzielone przecinkami (jak w Menedżerze zadań → Szczegóły).</p>
+		<div class="row">
+			<label for="step">Krok</label>
+			<input id="step" data-key="step" type="range" min="1" max="10" value="2" />
+			<span class="value" id="step-value"></span>
+		</div>
+		<div class="row">
+			<label for="ledLevel">Dioda suwaka</label>
+			<label><input id="ledLevel" data-key="ledLevel" type="checkbox" checked /> pokazuje poziom</label>
+		</div>
+		<div class="row">
+			<label for="dialOverlay">Ekran pokrętła</label>
+			<label><input id="dialOverlay" data-key="dialOverlay" type="checkbox" checked /> pokazuje poziom przy zmianie</label>
+		</div>
+		<p class="hint">Na faderze pozycja suwaka = głośność. Na gałkach, rolkach i pokrętle obrót zmienia o „Krok”, wciśnięcie wycisza.</p>
+	</body>
+</html>

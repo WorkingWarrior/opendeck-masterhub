@@ -1,0 +1,113 @@
+{
+  "Name": "Cooler Master MasterHUB",
+  "Description": "Unofficial device support for Cooler Master MasterHUB modules (15xKey, 3xKnob, 2xRoller, 1xDial, 5xFader), with lighting, volume, animated GIF, hardware sensor and clock actions",
+  "Author": "MasterHUB community",
+  "Version": "0.6.2",
+  "PluginUUID": "io.github.opendeck-masterhub",
+  "CodePathWin": "opendeck-masterhub.exe",
+  "Icon": "icon",
+  "Category": "MasterHUB",
+  "CategoryIcon": "icon",
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    },
+    {
+      "Platform": "linux"
+    },
+    {
+      "Platform": "mac",
+      "MinimumVersion": "11"
+    }
+  ],
+  "Actions": [
+    {
+      "UUID": "io.github.opendeck-masterhub.lighting",
+      "Name": "Podświetlenie",
+      "Tooltip": "Kolor, efekt i jasność diod bazy, gałek i fadera",
+      "Icon": "icons/lighting",
+      "States": [
+        {
+          "Image": "icons/lighting"
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": true,
+      "PropertyInspectorPath": "pi/lighting.html"
+    },
+    {
+      "UUID": "io.github.opendeck-masterhub.volume",
+      "Name": "Głośność",
+      "Tooltip": "Fader: pozycja = głośność. Gałki/rolki/pokrętło: obrót zmienia, wciśnięcie wycisza",
+      "Icon": "icons/volume",
+      "States": [
+        {
+          "Image": "icons/volume"
+        }
+      ],
+      "Controllers": [
+        "Encoder",
+        "Keypad"
+      ],
+      "SupportedInMultiActions": false,
+      "PropertyInspectorPath": "pi/volume.html"
+    },
+    {
+      "UUID": "io.github.opendeck-masterhub.gif",
+      "Name": "Animacja GIF",
+      "Tooltip": "Animowany GIF na klawiszu 15xKey lub ekranie pokrętła",
+      "Icon": "icons/gif",
+      "States": [
+        {
+          "Image": "icons/gif"
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": false,
+      "PropertyInspectorPath": "pi/gif.html"
+    },
+    {
+      "UUID": "io.github.opendeck-masterhub.sensor",
+      "Name": "Czujnik",
+      "Tooltip": "Temperatura, obciążenie, moc, wentylatory… z LibreHardwareMonitor",
+      "Icon": "icons/sensor",
+      "States": [
+        {
+          "Image": "icons/sensor",
+          "TitleAlignment": "middle",
+          "FontSize": 14
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": false,
+      "PropertyInspectorPath": "pi/sensor.html"
+    },
+    {
+      "UUID": "io.github.opendeck-masterhub.clock",
+      "Name": "Zegar",
+      "Tooltip": "Godzina i data – np. na okrągłym ekranie pokrętła; wciśnięcie może otworzyć program albo wysłać skrót",
+      "Icon": "icons/clock",
+      "States": [
+        {
+          "Image": "icons/clock",
+          "ShowTitle": false
+        }
+      ],
+      "Controllers": [
+        "Keypad"
+      ],
+      "SupportedInMultiActions": false,
+      "PropertyInspectorPath": "pi/clock.html"
+    }
+  ],
+  "DeviceNamespace": "mh",
+  "CodePathLin": "opendeck-masterhub-linux",
+  "CodePathMac": "opendeck-masterhub-mac"
+}

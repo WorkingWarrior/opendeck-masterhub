@@ -1,0 +1,7 @@
+# Cooler Master MasterHUB - dostep do modulow (hidraw) dla zalogowanego uzytkownika.
+# Instalacja:
+#   sudo cp 70-masterhub.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# Potem odlacz i podlacz MasterHUB.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="2516", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2516", TAG+="uaccess"

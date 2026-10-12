@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="pl">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="stylesheet" href="pi.css" />
+		<script>
+			// Ustawienia akcji: { press, entries: { "<moduł>:<dioda>": { mode, color, brightness, speed } } }
+			// moduł: all | base | knob | fader, dioda: 0 = cały moduł, 1.. = konkretna.
+			// Panel edytuje tylko wpis wybranej pozycji; brak wpisu = dziedziczy po ogólniejszym.
+			const DEFAULT = { mode: 1, color: "#743adf", brightness: 100, speed: 50 };
+			let socket = null;
+			let context = null;
+			let settings = { press: "toggle", entries: {} };
+			// Aktualny stan diod zapamiętany przez plugin: { "knob:1": {...}, "base:1": {...} }.
+			let live = {};
+
+			const $ = (id) => document.getElementById(id);
+			const selectedKey = () => {
+				const target = $("target").value;
+				const led = target === "knob" || target === "fader" ? $("led").value : "0";
+				return target + ":" + led;
+			};
+
+			// Stan diody na sprzęcie; dla całego modułu bierzemy jego pierwszą diodę.
+			function liveState(key) {
+				const [target, led] = key.split(":");
+				const modules = target === "all" ? ["base", "knob", "fader"] : [target];
+				for (const m of modules) {
+					const s = live[m + ":" + (led === "0" ? "1" : led)];
+					if (s) return s;
+				}
+				return null;
+			}
+
+			// Co pokazać dla pozycji: własny wpis, potem faktyczny stan diody, potem wpis odziedziczony.
+			function effective(key) {
+				if (settings.entries[key]) return { entry: settings.entries[key], from: key };
+				const state = liveState(key);
+				if (state) return { entry: state, from: "live" };
+				const [target] = key.split(":");
+				for (const k of [target + ":0", "all:0"]) {
+					if (settings.entries[k]) return { entry: settings.entries[k], from: k };
+				}
+				return { entry: DEFAULT, from: null };
+			}
+
+			const labels = { "all:0": "wszystkich modułów", "base:0": "bazy", "knob:0": "całego modułu gałek", "fader:0": "całego fadera" };
+
+			function showSelected() {
+				const key = selectedKey();
+				const { entry, from } = effective(key);
+				$("mode").value = String(entry.mode);
+				$("color").value = entry.color;
+				$("brightness").value = String(entry.brightness);
+				$("speed").value = String(entry.speed);
+				const own = from === key;
+				$("inherit").textContent = own
+					? ""
+					: from === "live"
+						? "Aktualny stan diody – zmiana zapisze ustawienie dla tej pozycji."
+						: from
+							? "Dziedziczy ustawienia " + labels[from] + "."
+							: "Brak ustawień – zmiana zapisze nowe.";
+				$("reset").classList.toggle("hidden", !own);
+				refreshVisibility();
+			}
+
+			function refreshVisibility() {
+				const mode = Number($("mode").value);
+				const target = $("target").value;
+				$("color-row").classList.toggle("hidden", mode < 1 || mode > 4);
+				$("speed-row").classList.toggle("hidden", mode < 2);
+				$("led-row").classList.toggle("hidden", target !== "knob" && target !== "fader");
+				$("led-4").disabled = $("led-5").disabled = target !== "fader";
+				if (target !== "fader" && Number($("led").value) > 3) $("led").value = "0";
+				$("brightness-value").textContent = $("brightness").value + "%";
+				$("speed-value").textContent = $("speed").value;
+			}
+
+			function send() {
+				if (socket && socket.readyState === 1) {
+					socket.send(JSON.stringify({ event: "setSettings", context, payload: settings }));
+				}
+			}
+
+			// Zmiana efektu/koloru/jasności/prędkości zapisuje wpis wybranej pozycji.
+			function editEntry() {
+				settings.entries[selectedKey()] = {
+					mode: Number($("mode").value),
+					color: $("color").value,
+					brightness: Number($("brightness").value),
+					speed: Number($("speed").value),
+				};
+				showSelected();
+				send();
+			}
+
+			function resetEntry() {
+				delete settings.entries[selectedKey()];
+				showSelected();
+				send();
+			}
+
+			function connectElgatoStreamDeckSocket(port, uuid, registerEvent, info, actionInfo) {
+				actionInfo = JSON.parse(actionInfo);
+				context = actionInfo.context;
+				const s = actionInfo.payload.settings || {};
+				if (s.entries) {
+					settings = { press: s.press || "toggle", entries: s.entries };
+				} else if (s.target) {
+					// Stary format (jeden zestaw ustawień) – zamieniamy na wpis.
+					const led = s.target === "knob" || s.target === "fader" ? s.led || 0 : 0;
+					settings = { press: s.press || "toggle", entries: { [s.target + ":" + led]: { mode: s.mode ?? 1, color: s.color || DEFAULT.color, brightness: s.brightness ?? 100, speed: s.speed ?? 50 } } };
+				}
+				$("press").value = settings.press;
+				const first = Object.keys(settings.entries)[0];
+				if (first) {
+					const [target, led] = first.split(":");
+					$("target").value = target;
+					$("led").value = led;
+				}
+				showSelected();
+
+				socket = new WebSocket("ws://localhost:" + port);
+				socket.onopen = () => {
+					socket.send(JSON.stringify({ event: registerEvent, uuid }));
+					send();
+				};
+				socket.onmessage = (msg) => {
+					const data = JSON.parse(msg.data);
+					if (data.event === "sendToPropertyInspector" && data.payload && data.payload.state) {
+						live = data.payload.state;
+						showSelected();
+					}
+				};
+			}
+
+			window.addEventListener("DOMContentLoaded", () => {
+				$("target").addEventListener("change", showSelected);
+				$("led").addEventListener("change", showSelected);
+				for (const id of ["mode", "color", "brightness", "speed"]) $(id).addEventListener("input", editEntry);
+				$("press").addEventListener("change", () => {
+					settings.press = $("press").value;
+					send();
+				});
+				$("reset").addEventListener("click", resetEntry);
+				showSelected();
+			});
+		</script>
+	</head>
+	<body>
+		<div class="row">
+			<label for="target">Moduł</label>
+			<select id="target">
+				<option value="all">Wszystkie</option>
+				<option value="base">Baza</option>
+				<option value="knob">3 gałki</option>
+				<option value="fader">Fader</option>
+			</select>
+		</div>
+		<div class="row" id="led-row">
+			<label for="led">Dioda</label>
+			<select id="led">
+				<option value="0">Wszystkie</option>
+				<option value="1">1</option>
+				<option value="2">2</option>
+				<option value="3">3</option>
+				<option value="4" id="led-4">4</option>
+				<option value="5" id="led-5">5</option>
+			</select>
+		</div>
+		<p class="hint" id="inherit"></p>
+		<div class="row">
+			<label for="mode">Efekt</label>
+			<select id="mode">
+				<option value="1">Stały kolor</option>
+				<option value="2">Oddychanie</option>
+				<option value="3">Stroboskop</option>
+				<option value="4">Spring</option>
+				<option value="5">Cykl kolorów</option>
+				<option value="6">Losowy</option>
+				<option value="7">Fala</option>
+				<option value="8">Woda</option>
+				<option value="9">Tęcza</option>
+				<option value="0">Wyłączone</option>
+			</select>
+		</div>
+		<div class="row" id="color-row">
+			<label for="color">Kolor</label>
+			<input id="color" type="color" value="#743adf" />
+		</div>
+		<div class="row">
+			<label for="brightness">Jasność</label>
+			<input id="brightness" type="range" min="0" max="100" value="100" />
+			<span class="value" id="brightness-value"></span>
+		</div>
+		<div class="row" id="speed-row">
+			<label for="speed">Prędkość</label>
+			<input id="speed" type="range" min="0" max="100" value="50" />
+			<span class="value" id="speed-value"></span>
+		</div>
+		<div class="row">
+			<label></label>
+			<button id="reset" class="hidden" type="button">Przywróć wspólne</button>
+		</div>
+		<div class="row">
+			<label for="press">Wciśnięcie</label>
+			<select id="press">
+				<option value="toggle">Włącz / wyłącz</option>
+				<option value="apply">Zastosuj ponownie</option>
+			</select>
+		</div>
+		<p class="hint">Ustawienia działają od razu i po każdym załadowaniu profilu.</p>
+	</body>
+</html>

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="pl">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="stylesheet" href="pi.css" />
+		<script src="common.js"></script>
+		<script>
+			function onFormChange() {
+				const press = document.getElementById("press").value;
+				const target = document.getElementById("target");
+				document.getElementById("target-row").classList.toggle("hidden", press === "none" || press === "mute");
+				document.getElementById("mute-row").classList.toggle("hidden", press !== "mute");
+				document.getElementById("key-hint").classList.toggle("hidden", press !== "key");
+				target.placeholder = press === "key" ? "ctrl+shift+m" : "https://… albo C:\\…\\program.exe";
+			}
+		</script>
+	</head>
+	<body>
+		<div class="row">
+			<label for="date">Data</label>
+			<label><input id="date" data-key="date" type="checkbox" checked /> pokazuj datę</label>
+		</div>
+		<div class="row">
+			<label for="seconds">Sekundy</label>
+			<label><input id="seconds" data-key="seconds" type="checkbox" /> pokazuj sekundy</label>
+		</div>
+		<div class="row">
+			<label for="press">Wciśnięcie</label>
+			<select id="press" data-key="press">
+				<option value="none">Nic nie rób</option>
+				<option value="open">Otwórz plik / program / URL</option>
+				<option value="key">Skrót klawiszowy</option>
+				<option value="mute">Wycisz / włącz dźwięk</option>
+			</select>
+		</div>
+		<div class="row" id="mute-row">
+			<label for="muteTarget">Wycisza</label>
+			<select id="muteTarget" data-key="muteTarget">
+				<option value="master">Głośność systemu</option>
+				<option value="mic">Mikrofon</option>
+				<option value="focused">Aktywne okno</option>
+			</select>
+		</div>
+		<div class="row" id="target-row">
+			<label for="target">Cel</label>
+			<input id="target" data-key="target" type="text" />
+		</div>
+		<p class="hint" id="key-hint">Np. ctrl+shift+m, win+d, media_play_pause. Modyfikatory: ctrl, shift, alt, win.</p>
+		<p class="hint">Postaw na klawiszu pokrętła, żeby zegar był na jego okrągłym ekranie. Kręcenie z akcją „Głośność” na chwilę pokaże poziom, potem wróci zegar.</p>
+	</body>
+</html>
