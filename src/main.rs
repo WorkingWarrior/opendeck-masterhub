@@ -33,9 +33,9 @@ use std::{
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 enum Msg {
-    Register { id: String, kind: Kind },
+    Register { id: String, kind: Kind, writer: Arc<Mutex<HidDevice>> },
     Deregister(String),
-    Input(String, Input),
+    Input(String, Input, Arc<Mutex<HidDevice>>),
 }
 
 struct Module {
@@ -81,26 +81,43 @@ fn watcher(tx: UnboundedSender<Msg>) {
             log::info!("Podłączono {} ({id})", kind.name());
 
             open_paths.lock().unwrap().insert(path.clone());
-            MODULES
-                .lock()
-                .unwrap()
-                .insert(id.clone(), Module { kind, writer: Arc::new(Mutex::new(writer)) });
-            let _ = tx.send(Msg::Register { id: id.clone(), kind });
+            // Writer jest unikalny dla tego połączenia – służy też jako token
+            // generacji: wątek czytający usuwa wpis z MODULES tylko wtedy, gdy
+            // nadal należy do niego (po ponownym podłączeniu, nawet pod inną
+            // ścieżką HID, watcher nadpisuje wpis nowym writerem).
+            let writer = Arc::new(Mutex::new(writer));
+            {
+                let mut modules = MODULES.lock().unwrap();
+                if modules.insert(id.clone(), Module { kind, writer: writer.clone() }).is_some() {
+                    let _ = tx.send(Msg::Deregister(id.clone()));
+                }
+                let _ = tx.send(Msg::Register { id: id.clone(), kind, writer: writer.clone() });
+            }
 
             let (tx, open_paths) = (tx.clone(), open_paths.clone());
             thread::spawn(move || {
-                read_loop(reader, kind, &id, &tx);
+                read_loop(reader, kind, &id, &writer, &tx);
                 log::info!("Odłączono {} ({id})", kind.name());
-                MODULES.lock().unwrap().remove(&id);
+                // Wpis usuwamy (i wysyłamy Deregister) tylko wtedy, gdy nie
+                // należy już do nowego połączenia tego samego urządzenia.
+                {
+                    let mut modules = MODULES.lock().unwrap();
+                    if modules
+                        .get(&id)
+                        .is_some_and(|m| Arc::ptr_eq(&m.writer, &writer))
+                    {
+                        modules.remove(&id);
+                        let _ = tx.send(Msg::Deregister(id));
+                    }
+                }
                 open_paths.lock().unwrap().remove(&path);
-                let _ = tx.send(Msg::Deregister(id));
             });
         }
         thread::sleep(Duration::from_secs(2));
     }
 }
 
-fn read_loop(dev: HidDevice, kind: Kind, id: &str, tx: &UnboundedSender<Msg>) {
+fn read_loop(dev: HidDevice, kind: Kind, id: &str, writer: &Arc<Mutex<HidDevice>>, tx: &UnboundedSender<Msg>) {
     let mut decoder = hub::Decoder::new(kind);
     let mut buf = [0u8; 512];
     loop {
@@ -111,10 +128,13 @@ fn read_loop(dev: HidDevice, kind: Kind, id: &str, tx: &UnboundedSender<Msg>) {
         };
         for input in decoder.decode(&buf[..n]) {
             if let Input::FaderValue(i, v) = input {
-                FADER_VALUES.lock().unwrap().insert((id.to_string(), i), v);
+                let modules = MODULES.lock().unwrap();
+                if modules.get(id).is_some_and(|m| Arc::ptr_eq(&m.writer, writer)) {
+                    FADER_VALUES.lock().unwrap().insert((id.to_string(), i), v);
+                }
                 continue;
             }
-            if tx.send(Msg::Input(id.to_string(), input)).is_err() {
+            if tx.send(Msg::Input(id.to_string(), input, writer.clone())).is_err() {
                 return;
             }
         }
@@ -123,17 +143,23 @@ fn read_loop(dev: HidDevice, kind: Kind, id: &str, tx: &UnboundedSender<Msg>) {
 
 /// Przekazuje zdarzenia sprzętowe do OpenDecka.
 async fn dispatcher(mut rx: UnboundedReceiver<Msg>) {
+    let mut active: HashMap<String, Arc<Mutex<HidDevice>>> = HashMap::new();
     while let Some(msg) = rx.recv().await {
         let mut lock = OUTBOUND_EVENT_MANAGER.lock().await;
         let Some(out) = lock.as_mut() else { continue };
         let result = match msg {
             // Baza nie ma żadnych elementów do przypisania – obsługujemy tylko jej diody.
-            Msg::Register { id, kind: Kind::Base } => {
+            Msg::Register { id, kind: Kind::Base, writer } => {
+                active.insert(id.clone(), writer);
                 background(move || actions::restore_lighting(&id));
                 Ok(())
             }
-            Msg::Deregister(id) if id.starts_with("mh-MHBS") => Ok(()),
-            Msg::Register { id, kind } => {
+            Msg::Deregister(id) if id.starts_with("mh-MHBS") => {
+                active.remove(&id);
+                Ok(())
+            }
+            Msg::Register { id, kind, writer } => {
+                active.insert(id.clone(), writer);
                 let (rows, columns, encoders) = kind.layout();
                 let r = out
                     .register_device(id.clone(), kind.name().to_string(), rows, columns, encoders, 0)
@@ -151,8 +177,11 @@ async fn dispatcher(mut rx: UnboundedReceiver<Msg>) {
                 });
                 r
             }
-            Msg::Deregister(id) => out.deregister_device(id).await,
-            Msg::Input(id, input) => match input {
+            Msg::Deregister(id) => {
+                active.remove(&id);
+                out.deregister_device(id).await
+            }
+            Msg::Input(id, input, writer) if active.get(&id).is_some_and(|w| Arc::ptr_eq(w, &writer)) => match input {
                 Input::KeyDown(p) => out.key_down(id, p).await,
                 Input::KeyUp(p) => out.key_up(id, p).await,
                 Input::EncoderDown(p) => out.encoder_down(id, p).await,
@@ -160,6 +189,7 @@ async fn dispatcher(mut rx: UnboundedReceiver<Msg>) {
                 Input::EncoderTwist(p, t) => out.encoder_change(id, p, t).await,
                 Input::FaderValue(..) => Ok(()),
             },
+            Msg::Input(..) => Ok(()),
         };
         if let Err(e) = result {
             log::error!("Błąd wysyłania do OpenDecka: {e}");
@@ -189,9 +219,13 @@ fn image_worker(device: String, kind: Kind) {
         let Some((position, image)) = next else { continue };
         match images::to_jpeg(image.as_deref(), size) {
             Ok(jpeg) => {
-                with_writer(&device, |dev| match kind {
-                    Kind::Dial => hub::upload_dial_image(dev, &jpeg),
-                    _ => hub::upload_key_image(dev, position, &jpeg),
+                gif::with_transition(&device, || {
+                    if !gif::is_playing(&device, position) {
+                        with_writer(&device, |dev| match kind {
+                            Kind::Dial => hub::upload_dial_image(dev, &jpeg),
+                            _ => hub::upload_key_image(dev, position, &jpeg),
+                        });
+                    }
                 });
             }
             Err(e) => log::error!("Nie udało się przygotować obrazka: {e}"),

@@ -79,12 +79,15 @@ is handy too.
    Then unplug and replug the MasterHUB.
 2. Programs used by the actions (usually already installed):
    - `pactl` (package `pulseaudio-utils`, works with PipeWire too) – "Volume",
-   - `xdotool` – the "focused window" volume target (X11 only, not available on Wayland),
+   - the "focused window" volume target:
+     - on X11 and XWayland windows: `xdotool`,
+     - on Wayland: Hyprland (`hyprctl`) and Sway (`swaymsg`) work out of the box; KDE Plasma: `kdotool`; GNOME Shell: via D-Bus (`gdbus`),
    - `xdg-open` – opening files / URLs.
 3. "Sensor" reads `/sys/class/hwmon` (temperatures, fans, power), CPU load and used memory –
    no extra programs.
 
-Keyboard shortcuts work on X11 (on Wayland it depends on the desktop). OpenDeck from Flatpak
+Keyboard shortcuts work on X11 and natively on Wayland (Hyprland, Sway, KDE Plasma). On GNOME,
+a fallback via `ydotool` is available (requires `ydotoold` daemon and `/dev/uinput` permissions). OpenDeck from Flatpak
 is supported – the plugin runs host programs through `flatpak-spawn --host`.
 
 ### macOS (11+, Apple Silicon and Intel)

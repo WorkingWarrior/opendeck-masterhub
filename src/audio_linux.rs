@@ -122,15 +122,163 @@ pub fn run(targets: &str, op: Op) -> Option<State> {
     first
 }
 
-/// Program aktywnego okna (X11, przez xdotool). Na Wayland nie ma ogólnego sposobu – `None`.
-pub fn focused_app() -> Option<String> {
-    let out = host::command("xdotool").args(["getactivewindow", "getwindowpid"]).output().ok()?;
-    let pid = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if pid.is_empty() {
+fn comm_from_pid(pid: &str) -> Option<String> {
+    let pid = pid.trim();
+    if pid.is_empty() || !pid.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
     let comm = host::read_file(&format!("/proc/{pid}/comm"))?;
-    Some(comm.trim().to_ascii_lowercase())
+    let comm = comm.trim().to_ascii_lowercase();
+    (!comm.is_empty()).then_some(comm)
+}
+
+/// Parsuje wyjście `hyprctl activewindow -j`.
+fn parse_hyprland_activewindow(json_str: &str) -> Option<String> {
+    let val: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    if let Some(pid) = val.get("pid").and_then(|p| p.as_i64()) {
+        if let Some(comm) = comm_from_pid(&pid.to_string()) {
+            return Some(comm);
+        }
+    }
+    val.get("initialClass")
+        .or_else(|| val.get("class"))
+        .and_then(|c| c.as_str())
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+}
+
+fn focused_hyprland() -> Option<String> {
+    let out = host::command("hyprctl").args(["activewindow", "-j"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_hyprland_activewindow(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parsuje wyjście `swaymsg -t get_tree`.
+fn parse_sway_tree(json_str: &str) -> Option<String> {
+    let val: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    fn find_focused(node: &serde_json::Value) -> Option<String> {
+        if node.get("focused").and_then(|f| f.as_bool()) == Some(true) {
+            if let Some(pid) = node.get("pid").and_then(|p| p.as_i64()) {
+                if let Some(comm) = comm_from_pid(&pid.to_string()) {
+                    return Some(comm);
+                }
+            }
+            if let Some(app_id) = node.get("app_id").and_then(|a| a.as_str()) {
+                let id = app_id.trim().to_ascii_lowercase();
+                if !id.is_empty() {
+                    return Some(id);
+                }
+            }
+            if let Some(class) = node.get("window_properties").and_then(|wp| wp.get("class")).and_then(|c| c.as_str()) {
+                let c = class.trim().to_ascii_lowercase();
+                if !c.is_empty() {
+                    return Some(c);
+                }
+            }
+        }
+        for key in ["nodes", "floating_nodes"] {
+            if let Some(nodes) = node.get(key).and_then(|n| n.as_array()) {
+                for child in nodes {
+                    if let Some(found) = find_focused(child) {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        None
+    }
+    find_focused(&val)
+}
+
+fn focused_sway() -> Option<String> {
+    let out = host::command("swaymsg").args(["-t", "get_tree"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_sway_tree(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// KDE Plasma: kdotool (drop-in replacement dla xdotool na KWin).
+fn focused_kde() -> Option<String> {
+    let out = host::command("kdotool").args(["getactivewindow", "getwindowpid"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    comm_from_pid(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parsuje odpowiedź D-Bus `org.gnome.Shell.Introspect.GetWindows`.
+fn parse_gnome_introspect(text: &str) -> Option<String> {
+    for block in text.split("},") {
+        if block.contains("'has-focus': <true>") {
+            for key in ["'wm-class': <'", "'app-id': <'"] {
+                if let Some(pos) = block.find(key) {
+                    let rest = &block[pos + key.len()..];
+                    if let Some(end) = rest.find('\'') {
+                        let raw = rest[..end].trim();
+                        let s = raw.strip_suffix(".desktop").unwrap_or(raw);
+                        let s = s.split('.').last().unwrap_or(s).to_ascii_lowercase();
+                        if !s.is_empty() {
+                            return Some(s);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn focused_gnome() -> Option<String> {
+    let out = host::command("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.gnome.Shell",
+            "--object-path",
+            "/org/gnome/Shell/Introspect",
+            "--method",
+            "org.gnome.Shell.Introspect.GetWindows",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_gnome_introspect(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn focused_x11() -> Option<String> {
+    let out = host::command("xdotool").args(["getactivewindow", "getwindowpid"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    comm_from_pid(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Program aktywnego okna (X11 / Wayland).
+///
+/// Na Waylandzie sprawdza kolejno: Hyprland (hyprctl), Sway (swaymsg), KDE (kdotool),
+/// GNOME Shell (gdbus Introspect), a na końcu xdotool (dla X11 lub okien XWayland).
+pub fn focused_app() -> Option<String> {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        if let Some(app) = focused_hyprland() {
+            return Some(app);
+        }
+        if let Some(app) = focused_sway() {
+            return Some(app);
+        }
+        if let Some(app) = focused_kde() {
+            return Some(app);
+        }
+        if let Some(app) = focused_gnome() {
+            return Some(app);
+        }
+    }
+    focused_x11()
 }
 
 #[cfg(test)]
@@ -159,5 +307,28 @@ mod tests {
         assert_eq!(parse_sink_inputs(json, &apps), vec![(42, 0.5, false)]);
         assert_eq!(parse_sink_inputs(json, &[normalize("firefox")]), vec![(43, 1.0, true)]);
         assert!(parse_sink_inputs(json, &[normalize("discord")]).is_empty());
+    }
+
+    #[test]
+    fn parse_hyprland_output() {
+        let json = r#"{"class": "Spotify", "initialClass": "spotify", "title": "Spotify"}"#;
+        assert_eq!(parse_hyprland_activewindow(json), Some("spotify".into()));
+    }
+
+    #[test]
+    fn parse_sway_output() {
+        let json = r#"{
+            "nodes": [
+                {"focused": false, "app_id": "firefox"},
+                {"focused": true, "app_id": "com.spotify.Client"}
+            ]
+        }"#;
+        assert_eq!(parse_sway_tree(json), Some("com.spotify.client".into()));
+    }
+
+    #[test]
+    fn parse_gnome_output() {
+        let text = r#"([{'app-id': <'firefox.desktop'>, 'has-focus': <false>}, {'app-id': <'org.gnome.Nautilus.desktop'>, 'has-focus': <true>, 'wm-class': <'org.gnome.Nautilus'>}],)"#;
+        assert_eq!(parse_gnome_introspect(text), Some("nautilus".into()));
     }
 }

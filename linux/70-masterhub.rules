@@ -5,3 +5,6 @@
 # Potem odlacz i podlacz MasterHUB.
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="2516", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTRS{idVendor}=="2516", TAG+="uaccess"
+
+# Dostep do wirtualnej klawiatury uinput (dla skrotow klawiszowych w Wayland / ydotool)
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

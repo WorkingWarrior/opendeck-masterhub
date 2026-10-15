@@ -211,18 +211,18 @@ use hwmon::fetch;
 #[cfg(target_os = "linux")]
 mod hwmon {
     use super::Sensor;
-    use std::{collections::HashMap, fs, path::Path, sync::Mutex};
+    use std::{collections::HashMap, fs, path::Path, sync::Mutex, time::Instant};
 
     fn read(path: &Path) -> Option<String> {
         fs::read_to_string(path).ok().map(|s| s.trim().to_string())
     }
 
-    /// (typ czujnika, prefiks pliku, końcówka pliku, dzielnik do jednostki, jednostka)
-    const KINDS: [(&str, &str, &str, f64, &str); 4] = [
-        ("Temperature", "temp", "input", 1000.0, "°C"),
-        ("Fan", "fan", "input", 1.0, "RPM"),
-        ("Power", "power", "average", 1_000_000.0, "W"),
-        ("Voltage", "in", "input", 1000.0, "V"),
+    /// (typ czujnika, prefiks pliku, dozwolone końcówki pliku, dzielnik do jednostki, jednostka)
+    const KINDS: [(&str, &str, &[&str], f64, &str); 4] = [
+        ("Temperature", "temp", &["input"], 1000.0, "°C"),
+        ("Fan", "fan", &["input"], 1.0, "RPM"),
+        ("Power", "power", &["average", "input"], 1_000_000.0, "W"),
+        ("Voltage", "in", &["input"], 1000.0, "V"),
     ];
 
     fn hwmon(out: &mut HashMap<String, Sensor>) {
@@ -238,14 +238,23 @@ mod hwmon {
             let Ok(files) = fs::read_dir(&dir) else { continue };
             for file in files.flatten() {
                 let fname = file.file_name().to_string_lossy().into_owned();
-                for (kind, prefix, suffix, div, unit) in KINDS {
-                    let Some(stem) = fname.strip_suffix(&format!("_{suffix}")) else { continue };
+                for (kind, prefix, suffixes, div, unit) in KINDS {
+                    let Some(suffix) = suffixes.iter().find(|s| fname.ends_with(&format!("_{s}"))) else { continue };
+                    let stem = &fname[..fname.len() - suffix.len() - 1];
                     if !stem.strip_prefix(prefix).is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())) {
                         continue;
                     }
-                    let label = read(&dir.join(format!("{stem}_label"))).unwrap_or_else(|| stem.to_string());
-                    let value = read(&file.path()).and_then(|v| v.parse::<f64>().ok()).map(|v| v / div);
                     let id = format!("/hwmon/{hw}/{stem}");
+                    if out.contains_key(&id) {
+                        continue;
+                    }
+                    let read_path = if suffixes.len() > 1 && dir.join(format!("{stem}_{}", suffixes[0])).exists() {
+                        dir.join(format!("{stem}_{}", suffixes[0]))
+                    } else {
+                        file.path()
+                    };
+                    let label = read(&dir.join(format!("{stem}_label"))).unwrap_or_else(|| stem.to_string());
+                    let value = read(&read_path).and_then(|v| v.parse::<f64>().ok()).map(|v| v / div);
                     out.insert(
                         id.clone(),
                         Sensor { id, hardware: hw.clone(), name: label, kind: kind.into(), value, unit: unit.into() },
@@ -253,6 +262,86 @@ mod hwmon {
                 }
             }
         }
+    }
+
+    /// Poprzedni odczyt RAPL dla każdego sensora: (czas, energia_uj).
+    static LAST_RAPL: Mutex<Option<HashMap<String, (Instant, u64)>>> = Mutex::new(None);
+
+    fn rapl(out: &mut HashMap<String, Sensor>) {
+        let Ok(dirs) = fs::read_dir("/sys/class/powercap") else { return };
+        let mut now_readings = Vec::new();
+        let now = Instant::now();
+
+        for entry in dirs.flatten() {
+            let name_str = entry.file_name().to_string_lossy().into_owned();
+            if !name_str.starts_with("intel-rapl:") {
+                continue;
+            }
+            let dir = entry.path();
+            let Some(zone_name) = read(&dir.join("name")) else { continue };
+            let Some(energy_str) = read(&dir.join("energy_uj")) else { continue };
+            let Ok(energy_uj) = energy_str.parse::<u64>() else { continue };
+            let max_range: Option<u64> = read(&dir.join("max_energy_range_uj"))
+                .and_then(|s| s.parse().ok());
+
+            let label = match zone_name.as_str() {
+                "package-0" => "Package".to_string(),
+                "core" => "Cores".to_string(),
+                "uncore" => "Uncore".to_string(),
+                "dram" => "DRAM".to_string(),
+                other => {
+                    if let Some(rest) = other.strip_prefix("package-") {
+                        format!("Package {rest}")
+                    } else {
+                        other.to_string()
+                    }
+                }
+            };
+            let id = format!("/powercap/{name_str}");
+            now_readings.push((id, label, energy_uj, max_range));
+        }
+
+        if now_readings.is_empty() {
+            return;
+        }
+
+        let mut last_guard = LAST_RAPL.lock().unwrap();
+        let prev_map = last_guard.take().unwrap_or_default();
+        let mut next_map = HashMap::new();
+
+        for (id, label, energy_uj, max_range) in now_readings {
+            let value = if let Some(&(last_time, last_uj)) = prev_map.get(&id) {
+                let dt = now.duration_since(last_time).as_secs_f64();
+                if dt >= 0.2 {
+                    let delta_uj = if energy_uj >= last_uj {
+                        energy_uj - last_uj
+                    } else if max_range.map_or(false, |r| r > last_uj) {
+                        (max_range.unwrap_or(0) - last_uj) + energy_uj
+                    } else {
+                        0
+                    };
+                    Some(delta_uj as f64 / (dt * 1_000_000.0))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            next_map.insert(id.clone(), (now, energy_uj));
+
+            out.insert(
+                id.clone(),
+                Sensor {
+                    id,
+                    hardware: "CPU".into(),
+                    name: label,
+                    kind: "Power".into(),
+                    value,
+                    unit: "W".into(),
+                },
+            );
+        }
+        *last_guard = Some(next_map);
     }
 
     /// Poprzedni odczyt /proc/stat: (czas całkowity, czas bezczynności).
@@ -294,6 +383,7 @@ mod hwmon {
     pub fn fetch() -> Result<HashMap<String, Sensor>, String> {
         let mut out = HashMap::new();
         hwmon(&mut out);
+        rapl(&mut out);
         cpu_load(&mut out);
         memory(&mut out);
         Ok(out)

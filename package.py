@@ -108,6 +108,7 @@ def install(lang):
     for name, (data, executable) in plugin_files(lang).items():
         path = dest / name
         path.parent.mkdir(parents=True, exist_ok=True)
+        path.unlink(missing_ok=True)
         path.write_bytes(data)
         if executable and sys.platform != "win32":
             path.chmod(0o755)

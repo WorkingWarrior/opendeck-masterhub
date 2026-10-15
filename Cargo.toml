@@ -33,10 +33,10 @@ windows = { version = "0.58", features = [
 ] }
 windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse"] }
 
-# Linux: hidraw bez systemowej libudev (nie trzeba nic doinstalowywa?? do kompilacji).
+# Linux: hidraw bez systemowej libudev (nie trzeba nic doinstalowywać do kompilacji).
 [target.'cfg(target_os = "linux")'.dependencies]
 hidapi = { version = "2", default-features = false, features = ["linux-native-basic-udev"] }
-enigo = { version = "0.2", default-features = false, features = ["x11rb"] }
+enigo = { version = "0.6.1", default-features = false, features = ["x11rb", "wayland"] }
 
 # macOS: tryb wsp????dzielony ??? plugin otwiera ka??dy modu?? dwa razy (odczyt i zapis).
 [target.'cfg(target_os = "macos")'.dependencies]

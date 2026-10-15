@@ -78,12 +78,15 @@ Nic więcej nie trzeba. Akcja „Czujnik” wymaga LibreHardwareMonitor z włąc
    Potem odłącz i podłącz MasterHUB.
 2. Programy używane przez akcje (zwykle już są w systemie):
    - `pactl` (pakiet `pulseaudio-utils`, działa też z PipeWire) – akcja „Głośność”,
-   - `xdotool` – cel „Aktywne okno” (tylko X11; na Wayland niedostępny),
+   - cel „Aktywne okno”:
+     - na X11 oraz w oknach XWayland: `xdotool`,
+     - na Waylandzie: Hyprland (`hyprctl`) i Sway (`swaymsg`) działają natywnie; na KDE Plasma: `kdotool`; na GNOME Shell: przez D-Bus (`gdbus`),
    - `xdg-open` – otwieranie plików / adresów.
 3. „Czujnik” czyta `/sys/class/hwmon` (temperatury, wentylatory, moc), obciążenie CPU
    i zajętą pamięć – bez dodatkowych programów.
 
-Skróty klawiszowe działają na X11 (na Wayland zależnie od środowiska). OpenDeck z Flatpaka
+Skróty klawiszowe działają na X11 oraz natywnie na Waylandzie (Hyprland, Sway, KDE Plasma). Na GNOME
+dostępny jest fallback przez `ydotool` (wymaga demonu `ydotoold` i reguły `/dev/uinput`). OpenDeck z Flatpaka
 jest obsługiwany – plugin uruchamia programy systemowe przez `flatpak-spawn --host`.
 
 ### macOS (11+, Apple Silicon i Intel)

@@ -12,7 +12,7 @@ use std::{
     io::Cursor,
     path::PathBuf,
     sync::{
-        Arc, LazyLock, Mutex,
+        Arc, LazyLock, Mutex, Weak,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -50,6 +50,7 @@ type Frames = Arc<Vec<(Vec<Vec<u8>>, Duration)>>;
 static CACHE: LazyLock<Mutex<HashMap<(PathBuf, Layout), Frames>>> = LazyLock::new(Default::default);
 /// Odtwarzana animacja: flaga zatrzymania, blokada trzymana podczas wysyłania klatki
 /// (żeby zatrzymanie mogło poczekać na jej koniec) i klawisz akcji, która ją uruchomiła.
+#[derive(Clone)]
 struct Player {
     stop: Arc<AtomicBool>,
     frame: Arc<Mutex<()>>,
@@ -66,6 +67,25 @@ impl Player {
 
 /// Odtwarzane animacje: (urządzenie, klawisz lub WHOLE_MODULE) -> odtwarzacz.
 static PLAYERS: LazyLock<Mutex<HashMap<(String, u8), Player>>> = LazyLock::new(Default::default);
+/// Serializuje zmiany właściciela modułu i wysyłkę zwykłych obrazów.
+static TRANSITIONS: LazyLock<Mutex<HashMap<String, Weak<Mutex<()>>>>> = LazyLock::new(Default::default);
+
+fn transition(device: &str) -> Arc<Mutex<()>> {
+    let mut transitions = TRANSITIONS.lock().unwrap();
+    let key = device.to_string();
+    if let Some(lock) = transitions.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    transitions.insert(key, Arc::downgrade(&lock));
+    lock
+}
+
+pub(crate) fn with_transition<R>(device: &str, f: impl FnOnce() -> R) -> R {
+    let lock = transition(device);
+    let _guard = lock.lock().unwrap();
+    f()
+}
 
 fn gif_dir() -> PathBuf {
     std::env::current_exe()
@@ -148,28 +168,48 @@ pub fn is_playing(device: &str, position: u8) -> bool {
 /// i czeka na koniec wysyłanej klatki. Animacji na cały moduł z innego klawisza nie rusza.
 /// Zwraca, czy coś zatrzymano.
 pub fn stop(device: &str, position: u8, whole_module: bool) -> bool {
+    with_transition(device, || stop_inner(device, position, whole_module))
+}
+
+fn stop_inner(device: &str, position: u8, whole_module: bool) -> bool {
     let key = (device.to_string(), if whole_module { WHOLE_MODULE } else { position });
+    // Najpierw zatrzymujemy odtwarzacz i czekamy na koniec wysyłanej klatki,
+    // dopiero potem usuwamy wpis z PLAYERS: dopóki wpis istnieje, obrazy z
+    // OpenDecka są pomijane, więc ostatnia klatka starego odtwarzacza nie
+    // nadpisze obrazu nowej akcji.
     let player = {
-        let mut players = PLAYERS.lock().unwrap();
-        match players.get(&key) {
-            Some(p) if p.owner == position => players.remove(&key),
-            _ => None,
-        }
+        let players = PLAYERS.lock().unwrap();
+        players.get(&key).filter(|p| p.owner == position).cloned()
     };
-    player.map(|p| p.halt()).is_some()
+    let Some(player) = player else { return false };
+    player.halt();
+    // Usuwamy tylko wtedy, gdy w międzyczasie nie wystartowała nowa animacja.
+    let mut players = PLAYERS.lock().unwrap();
+    players
+        .get(&key)
+        .is_some_and(|p| Arc::ptr_eq(&p.stop, &player.stop))
+        .then(|| players.remove(&key))
+        .is_some()
 }
 
 /// Uruchamia (lub restartuje) animację. Przy `Layout::Grid` zajmuje wszystkie klawisze modułu.
 pub fn play(device: &str, kind: Kind, position: u8, path: PathBuf, layout: Layout) {
     let whole = matches!(layout, Layout::Grid { .. } | Layout::Copies { .. });
-    stop(device, position, whole);
     let slot = if whole { WHOLE_MODULE } else { position };
+    with_transition(device, || play_inner(device, kind, position, path, layout, whole, slot));
+}
+
+fn play_inner(device: &str, kind: Kind, position: u8, path: PathBuf, layout: Layout, whole: bool, slot: u8) {
+    stop_inner(device, position, whole);
     let stop_flag = Arc::new(AtomicBool::new(false));
     let frame_lock = Arc::new(Mutex::new(()));
     let player = Player { stop: stop_flag.clone(), frame: frame_lock.clone(), owner: position };
     // Nowa animacja na cały moduł zastępuje poprzednią, nawet z innego klawisza.
     let old = PLAYERS.lock().unwrap().insert((device.to_string(), slot), player);
     if let Some(old) = old {
+        // Czekamy na koniec wysyłanej klatki starego odtwarzacza przed startem
+        // wątku nowego – inaczej ostatnia klatka starego mogłaby nadpisać
+        // pierwszą klatkę nowej animacji.
         old.halt();
     }
     let min_frame = Duration::from_millis(if whole { MIN_MODULE_FRAME_MS } else { MIN_FRAME_MS });
@@ -231,4 +271,64 @@ pub fn play(device: &str, kind: Kind, position: u8, path: PathBuf, layout: Layou
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regresja: stop() musi czekać na koniec wysyłanej klatki i przez ten czas
+    /// utrzymywać wpis w PLAYERS – inaczej obraz nowej akcji (przepuszczony przez
+    /// set_image, bo is_playing == false) mogłaby nadpisać ostatnia klatka
+    /// zatrzymywanego odtwarzacza.
+    #[test]
+    fn stop_czeka_na_koniec_klatki_przed_usunieciem_wpisu() {
+        let frame = Arc::new(Mutex::new(()));
+        let player = Player {
+            stop: Arc::new(AtomicBool::new(false)),
+            frame: frame.clone(),
+            owner: 3,
+        };
+        PLAYERS
+            .lock()
+            .unwrap()
+            .insert(("test-stop".into(), 3), player);
+
+        let guard = frame.lock().unwrap(); // symulacja trwającej wysyłki klatki
+        let stopped = thread::spawn(move || stop("test-stop", 3, false));
+        thread::sleep(Duration::from_millis(100));
+        assert!(
+            !stopped.is_finished(),
+            "stop nie może zwrócić w trakcie wysyłki klatki"
+        );
+        assert!(
+            is_playing("test-stop", 3),
+            "wpis musi blokować obrazy z OpenDecka do końca klatki"
+        );
+        drop(guard); // koniec wysyłki klatki
+
+        assert!(stopped.join().unwrap());
+        assert!(!is_playing("test-stop", 3));
+    }
+
+    /// Regresja: stop() z klawisza, który nie uruchomił animacji na cały moduł,
+    /// nie zatrzymuje jej.
+    #[test]
+    fn stop_nie_zatrzymuje_cudzej_animacji() {
+        let player = Player {
+            stop: Arc::new(AtomicBool::new(false)),
+            frame: Arc::new(Mutex::new(())),
+            owner: 2,
+        };
+        PLAYERS
+            .lock()
+            .unwrap()
+            .insert(("test-owner".into(), WHOLE_MODULE), player);
+        assert!(!stop("test-owner", 5, true));
+        assert!(is_playing("test-owner", 5), "animacja nadal gra");
+        PLAYERS
+            .lock()
+            .unwrap()
+            .remove(&(String::from("test-owner"), WHOLE_MODULE));
+    }
 }
