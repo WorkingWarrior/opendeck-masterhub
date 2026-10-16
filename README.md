@@ -110,6 +110,10 @@ the music icon. HTTP(S) artwork needs network access. See the
 and [MPRIS specification](https://specifications.freedesktop.org/mpris/latest/).
 Windows and macOS builds keep the action visible but do not provide an MPRIS backend.
 
+The settings include an accent colour and a font family. Japanese text uses a CJK
+fallback font when the selected font lacks the glyphs; on Arch/CachyOS install
+`noto-fonts-cjk` if needed. New fonts are detected after restarting the plugin.
+
 To check the action on hardware, build/package and install the updated plugin, restart
 OpenDeck, then assign **Now Playing** to the 1xDial Keypad and Encoder separately.
 Start an MPRIS player (for example a Chromium media tab), check artwork/title/progress,
@@ -139,7 +143,7 @@ verified on a physical MasterHUB.
 
 ## Building
 
-Requires [Rust](https://rustup.rs) (1.85+) and Python 3 for packaging. Code comments are in Polish.
+Requires [Rust](https://rustup.rs) (1.89+, matching the locked dependencies) and Python 3 for packaging. Code comments are in Polish.
 
 | System | Command | Output |
 |---|---|---|

@@ -2,6 +2,7 @@
 name = "opendeck-masterhub"
 version = "0.7.0"
 edition = "2024"
+rust-version = "1.89"
 
 [dependencies]
 anyhow = "1"
@@ -18,6 +19,7 @@ serde_json = "1"
 simplelog = "0.12"
 tokio = { version = "1", features = ["full"] }
 ureq = "2"
+url = "2"
 
 [target.'cfg(windows)'.dependencies]
 hidapi = "2"
@@ -40,7 +42,6 @@ hidapi = { version = "2", default-features = false, features = ["linux-native-ba
 enigo = { version = "0.6.1", default-features = false, features = ["x11rb", "wayland"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 futures-util = "0.3"
-url = "2"
 
 # macOS: tryb wsp????dzielony ??? plugin otwiera ka??dy modu?? dwa razy (odczyt i zapis).
 [target.'cfg(target_os = "macos")'.dependencies]

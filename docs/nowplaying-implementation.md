@@ -3,19 +3,23 @@
 ## Architektura
 
 Akcja `io.github.opendeck-masterhub.nowplaying` używa jednego asynchronicznego monitora
-`zbus` na sesyjnym D-Bus dla wszystkich widocznych instancji. Monitor działa tylko od
-pierwszego `will_appear` do ostatniego `will_disappear`. Nazwy MPRIS są sortowane;
-tryb Auto wybiera pierwszą aktualnie grającą usługę, a gdy żadna nie gra — pierwszą
-dostępną. Wskazana usługa jest wybierana dokładnie po nazwie D-Bus. Sygnały
+`zbus` na sesyjnym D-Bus dla wszystkich widocznych instancji. Po ostatnim
+`will_disappear` zamyka połączenie i czeka na nową instancję bez odpytywania.
+Nazwy MPRIS są sortowane; tryb Auto preferuje grającą usługę, potem wstrzymaną,
+a następnie pozostałe. W każdej grupie wygrywa pierwsza nazwa w porządku leksykalnym.
+Wskazana usługa jest wybierana dokładnie po nazwie D-Bus. Sygnały
 `NameOwnerChanged`, `PropertiesChanged` i `Seeked` aktualizują stan. Po zmianie
 właściwości odpytywany jest tylko jej nadawca. Pozycja pomiędzy sygnałami jest
 interpolowana lokalnie z uwzględnieniem `Rate` i ograniczona czasem utworu.
+Wywołania D-Bus mają limit 3 s, a ponowne połączenia odstęp 5 s. Kolejka sterowania
+ma limit 64 zdarzeń; przepełnienie jest logowane. Zapis głośności aktualizuje lokalną
+bazę kolejnego obrotu dopiero po sukcesie odpowiedzi D-Bus.
 
 Metadane obejmują tytuł, wykonawcę, album, adres okładki i czas trwania. Czas jest
 odczytywany zarówno z `i64` zgodnego z MPRIS, jak i `u64` stosowanego przez Spotify;
 wartości spoza zakresu `i64` są odrzucane. Długość ze Spotify może dzięki temu
-być użyta do rysowania postępu. Odczytywane
-są też stan, pozycja, głośność i możliwości `CanControl`, `CanPlay`, `CanPause`,
+być użyta do rysowania postępu. Brak pozycji lub długości ukrywa pierścień zamiast
+rysować zmyślony postęp. Odczytywane są też stan, pozycja, głośność i możliwości `CanControl`, `CanPlay`, `CanPause`,
 `CanSeek`. Brak opcjonalnej właściwości nie zatrzymuje akcji. `PlayPause`, `Seek`
 (mikrosekundy MPRIS) i zapis `Volume` są wysyłane tylko, gdy właściwe możliwości
 i właściwości są dostępne. Nieudany zapis jest logowany, bez udawania sukcesu.
@@ -43,13 +47,18 @@ pokazuje okładkę albo ikonę nuty, bez dodatkowych napisów. Przy braku odtwar
 Dial pokazuje ikonę i tekst „Brak odtwarzacza”, a klawisz ikonę zastępczą; sterowanie
 nic nie wysyła. Okładki z `file://` i HTTP(S) są pobierane poza wątkami async,
 z limitem 4 MiB danych, 4000 px wymiaru, 32 MiB alokacji dekodera i 3 s dla HTTP.
-Bufor zawiera do 12 zdekodowanych okładek 240×240; nieudane pobranie jest ponawiane
-najwcześniej po 30 s.
+Jeden worker pobiera okładki, a drugi rysuje najnowszą migawkę odtwarzaczy i wysyła
+obrazy. HTTP, dekodowanie ani HID nie zatrzymują pętli odbierającej sygnały MPRIS.
+Podczas pobierania wyświetlana jest ikona nuty. Bufor LRU zawiera do 12 okładek
+240×240, również zapisy nieudanych pobrań; ponowienie następuje najwcześniej po 30 s.
+Zadania pobierania są współdzielone i nie są powielane przez instancje akcji.
 
 Dial korzysta z istniejącego `overlay` i blokady przejścia GIF. Właściciel ekranu
 jest przypisany do kontekstu akcji; spóźniona klatka poprzedniej akcji nie może
 nadpisać nowej. Nakładka głośności ma pierwszeństwo i po zakończeniu przywraca
-ostatni obraz Now Playing. Po zatrzymaniu GIF-a aktualny obraz bezpośredni jest
+ostatni obraz Now Playing pod tą samą blokadą przejścia. Zmiana ustawień unieważnia
+starą klatkę. Nieudany zapis HID nie oznacza obrazu jako wysłanego, więc można go
+ponowić. Przejęcie ekranu przez widget zatrzymuje poprzedni GIF. Po zatrzymaniu GIF-a aktualny obraz bezpośredni jest
 ponownie wysyłany. Identyczne obrazy Dial i klawiszy są pomijane; cykliczne
 i sygnałowe renderowanie jest ograniczone do jednej klatki na sekundę.
 
@@ -69,13 +78,20 @@ Na MasterHUB 1xDial należy przypisać Now Playing **osobno** do Keypad
 (ekran i naciśnięcie) oraz Encoder (obrót i ewentualne naciśnięcie enkodera).
 Jedno przypisanie nie tworzy drugiego. Na 15xKey przypisuje się akcję do
 wybranego klawisza. Panel pozwala wybrać Auto lub usługę, tryb obrotu,
-krok przewijania oraz widoczność okładki, postępu i wykonawcy.
+krok przewijania, widoczność okładki, postępu i wykonawcy, kolor akcentu i czcionkę.
 
 ## Walidacja i ograniczenia
 
 - `cargo check` — PASS.
 - `cargo test` — PASS, 10 istniejących testów; nie dodano ani nie zmieniono testów.
 - `cargo build --release` — PASS dla Linuksa.
+- `CARGO_TARGET_DIR=.../target sh build-linux.sh` i `python3 package.py` — PASS;
+  paczki EN/PL zawierają aktualny plik Linuksa, panel i poprawne ścieżki zasobów.
+- `cargo clippy --all-targets --locked` — kod wyjścia 0. Pozostały zastane uwagi
+  w innych akcjach i przykładach; tryb `-D warnings` nie przechodzi całego
+  repozytorium. Nie wyłączono lintów ani nie refaktoryzowano pozostałych akcji.
+- `rustfmt --check` dla `nowplaying.rs`, `overlay.rs` i `render.rs` — PASS;
+  nie formatowano całego repozytorium.
 - `git diff --check` — PASS.
 - Skrypt panelu `pi/nowplaying.html` sprawdzony przez `node --check` — PASS.
 - Jednorazowy odczyt natywnym `zbus` z sesyjnego D-Bus potwierdził dekodowanie
@@ -84,13 +100,13 @@ krok przewijania oraz widoczność okładki, postępu i wykonawcy.
   To potwierdza protokół, **nie** uruchomienie akcji w OpenDeck ani działanie HID.
 - Dostępny jest tylko target `x86_64-unknown-linux-gnu`; kompilacji Windows/macOS
   nie zweryfikowano. Backend tych platform jawnie nie obsługuje MPRIS.
-- Nie wykonano testu na fizycznym MasterHUB ani w OpenDeck Flatpak. Zbudowany nowy
-  plik jest w `target/release/opendeck-masterhub` (SHA-256
-  `ba6c81f4f58148c6edbc66683b3da618c937a07ba47c3d3af58c2ae98b3220e0`);
-  istniejący `dist/bin/opendeck-masterhub-linux` pozostał nietknięty (SHA-256
-  `b2719942b4826e1d53b3145159adfc0b498f4d51d991e6cd7dfb7058cfc4651d`).
-  Przed pakowaniem należy uruchomić
-  `sh build-linux.sh`, a potem `python3 package.py --lang pl` (lub `en`).
+- Nie wykonano pełnego testu sprzętowego cyklu życia ani testu w OpenDeck Flatpak.
+  Podglądy renderu potwierdziły tekst japoński, zmianę fontu i koloru oraz układ
+  koła, także na jasnym tle i przy długich napisach. Odczyt z uruchomionego Spotify
+  potwierdził przyczynę braku postępu (`u64`) i poprawne dekodowanie długości.
+- Przed pakowaniem uruchom `sh build-linux.sh`, następnie `python3 package.py`
+  (lub `--lang pl` / `--lang en`). Paczka bierze plik z `dist/bin`, nie bezpośrednio
+  z `target/release`. Kopiowanie i pakowanie nie zmieniają aplikacji OpenDeck.
 - KDE Plasma/Wayland nie wymaga Enigo dla tej akcji; odtwarzacz musi publikować
   MPRIS na tej samej sesji D-Bus. Flatpak może filtrować inne nazwy MPRIS.
   Sprawdź uprawnienia OpenDeck; w razie potrzeby nadaj wąskie
@@ -102,7 +118,7 @@ krok przewijania oraz widoczność okładki, postępu i wykonawcy.
 ## Ręczne sprawdzenie
 
 1. Zbuduj i zapakuj aktualną wersję, zainstaluj paczkę przez OpenDeck i uruchom
-   go ponownie. Nie nadpisuj starszego `dist/bin` bez świadomego przebudowania.
+   go ponownie.
 2. Przypisz akcję do Keypad 1xDial. Uruchom odtwarzacz MPRIS. Sprawdź okładkę,
    tytuł, wykonawcę i postęp; wstrzymaj oraz wznow odtwarzanie naciśnięciem.
 3. Przypisz osobną instancję do Encoder 1xDial. Sprawdź przewijanie z ustawionym
@@ -113,3 +129,6 @@ krok przewijania oraz widoczność okładki, postępu i wykonawcy.
 5. Przełącz profil oraz inną akcję na ekranie Dial. Pokaż nakładkę głośności
    i sprawdź powrót obrazu. Zamień akcję GIF na Now Playing; stary GIF ani
    stara okładka nie powinny wracać. Sprawdź `masterhub.log` przy błędach.
+6. Wybierz inny kolor i font. Zmień profil i wróć; ustawienia powinny pozostać.
+   Odtwórz utwór z japońskim tytułem i sprawdź także font bez japońskich glifów,
+   aby potwierdzić działanie fontu zastępczego na ekranie.
