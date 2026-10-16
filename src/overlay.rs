@@ -6,7 +6,7 @@
 use image::RgbImage;
 use std::{
     collections::HashMap,
-    sync::{LazyLock, Mutex},
+    sync::{LazyLock, Mutex, atomic::{AtomicBool, Ordering}},
     thread,
     time::{Duration, Instant},
 };
@@ -28,36 +28,70 @@ static STATE: LazyLock<Mutex<HashMap<String, State>>> = LazyLock::new(Default::d
 static LAST_IMAGE: LazyLock<Mutex<HashMap<String, Option<String>>>> = LazyLock::new(Default::default);
 /// Obraz rysowany przez plugin w pełnej rozdzielczości (np. zegar) – ma pierwszeństwo przed
 /// obrazem od OpenDecka, który jest przeskalowany do 144×144.
-static DIRECT: LazyLock<Mutex<HashMap<String, RgbImage>>> = LazyLock::new(Default::default);
+struct DirectImage {
+    owner: String,
+    image: RgbImage,
+}
+static DIRECT: LazyLock<Mutex<HashMap<String, DirectImage>>> = LazyLock::new(Default::default);
+static OWNERS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
 
 fn upload(device: &str, img: &RgbImage) {
     let jpeg = crate::render::jpeg(img);
     with_writer(device, |dev| hub::upload_dial_image(dev, &jpeg));
 }
 
-/// Ustawia obraz pokrętła rysowany przez plugin i od razu go wysyła (chyba że trwa nakładka).
-pub fn set_direct(device: &str, img: RgbImage) {
-    DIRECT.lock().unwrap().insert(device.to_string(), img.clone());
-    if !active(device) {
-        upload(device, &img);
-    }
+/// Zmiana akcji na jednym ekranie unieważnia wszystkie spóźnione klatki poprzedniej.
+pub fn claim_direct(device: &str, owner: &str) {
+    crate::gif::with_transition(device, || {
+        OWNERS.lock().unwrap().insert(device.into(), owner.into());
+        DIRECT.lock().unwrap().remove(device);
+    });
 }
 
-/// Usuwa obraz rysowany przez plugin; zwraca, czy był ustawiony.
-pub fn clear_direct(device: &str) -> bool {
-    DIRECT.lock().unwrap().remove(device).is_some()
+/// Właściciel i zapis HID zmieniają się pod tą samą blokadą co zwykłe obrazy i GIF.
+pub fn set_direct_owned(device: &str, owner: &str, img: RgbImage) {
+    crate::gif::with_transition(device, || {
+        if OWNERS.lock().unwrap().get(device).is_none_or(|current| current != owner) { return }
+        let mut direct = DIRECT.lock().unwrap();
+        if direct.get(device).is_some_and(|d| d.owner == owner && d.image == img) { return }
+        direct.insert(device.to_string(), DirectImage { owner: owner.to_string(), image: img.clone() });
+        drop(direct);
+        if !active(device) { upload(device, &img); }
+    });
+}
+
+pub fn set_direct_owned_if(device: &str, owner: &str, img: RgbImage, alive: &AtomicBool) {
+    crate::gif::with_transition(device, || {
+        if !alive.load(Ordering::Acquire) { return }
+        if OWNERS.lock().unwrap().get(device).is_none_or(|current| current != owner) { return }
+        let mut direct = DIRECT.lock().unwrap();
+        if direct.get(device).is_some_and(|d| d.owner == owner && d.image == img) { return }
+        direct.insert(device.to_string(), DirectImage { owner: owner.to_string(), image: img.clone() });
+        drop(direct);
+        if !active(device) { upload(device, &img); }
+    });
+}
+
+pub fn clear_direct_owned(device: &str, owner: &str) -> bool {
+    crate::gif::with_transition(device, || {
+        let mut owners = OWNERS.lock().unwrap();
+        if owners.get(device).is_none_or(|current| current != owner) { return false }
+        owners.remove(device);
+        DIRECT.lock().unwrap().remove(device);
+        true
+    })
 }
 
 pub fn has_direct(device: &str) -> bool {
-    DIRECT.lock().unwrap().contains_key(device)
+    OWNERS.lock().unwrap().contains_key(device)
 }
 
 /// Ponownie wysyła obraz pluginu (np. po ponownym podłączeniu pokrętła).
 pub fn refresh_direct(device: &str) {
-    let img = DIRECT.lock().unwrap().get(device).cloned();
-    if let Some(img) = img {
-        upload(device, &img);
-    }
+    crate::gif::with_transition(device, || {
+        let img = DIRECT.lock().unwrap().get(device).map(|d| d.image.clone());
+        if let Some(img) = img.filter(|_| !active(device)) { upload(device, &img); }
+    });
 }
 
 /// Zapamiętuje obraz od OpenDecka, żeby przywrócić go po nakładce.
@@ -96,7 +130,7 @@ fn worker(device: String) {
             (s.pending.take(), s.until.is_none_or(|u| Instant::now() >= u))
         };
         if let Some(img) = next {
-            upload(&device, &img);
+            crate::gif::with_transition(&device, || upload(&device, &img));
             continue;
         }
         if !expired {
@@ -104,15 +138,16 @@ fn worker(device: String) {
             continue;
         }
         // Koniec nakładki: przywracamy obraz pluginu (np. zegar) albo ten od OpenDecka.
-        let direct = DIRECT.lock().unwrap().get(&device).cloned();
-        if let Some(img) = direct {
-            upload(&device, &img);
-        } else {
-            let last = LAST_IMAGE.lock().unwrap().get(&device).cloned().flatten();
-            if let Ok(jpeg) = images::to_jpeg(last.as_deref(), hub::DIAL_IMAGE_SIZE) {
-                with_writer(&device, |dev| hub::upload_dial_image(dev, &jpeg));
+        crate::gif::with_transition(&device, || {
+            let direct = DIRECT.lock().unwrap().get(&device).map(|d| d.image.clone());
+            if let Some(img) = direct { upload(&device, &img); }
+            else {
+                let last = LAST_IMAGE.lock().unwrap().get(&device).cloned().flatten();
+                if let Ok(jpeg) = images::to_jpeg(last.as_deref(), hub::DIAL_IMAGE_SIZE) {
+                    with_writer(&device, |dev| hub::upload_dial_image(dev, &jpeg));
+                }
             }
-        }
+        });
         let mut states = STATE.lock().unwrap();
         let s = states.entry(device.clone()).or_default();
         // W trakcie przywracania mogła przyjść nowa nakładka – wtedy działamy dalej.

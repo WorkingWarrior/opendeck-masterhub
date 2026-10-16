@@ -1,6 +1,6 @@
 {
   "Name": "Cooler Master MasterHUB",
-  "Description": "Unofficial device support for Cooler Master MasterHUB modules (15xKey, 3xKnob, 2xRoller, 1xDial, 5xFader), with lighting, volume, animated GIF, hardware sensor and clock actions",
+  "Description": "Unofficial device support for Cooler Master MasterHUB modules (15xKey, 3xKnob, 2xRoller, 1xDial, 5xFader), with lighting, volume, animated GIF, hardware sensor, clock and Now Playing actions",
   "Author": "MasterHUB community",
   "Version": "0.7.0",
   "PluginUUID": "io.github.opendeck-masterhub",
@@ -88,6 +88,24 @@
       ],
       "SupportedInMultiActions": false,
       "PropertyInspectorPath": "pi/sensor.html"
+    },
+    {
+      "UUID": "io.github.opendeck-masterhub.nowplaying",
+      "Name": "Now Playing",
+      "Tooltip": "MPRIS track and artwork on the dial or a key; press to play/pause, rotate to seek or change player volume",
+      "Icon": "icons/volume",
+      "States": [
+        {
+          "Image": "icons/volume",
+          "ShowTitle": false
+        }
+      ],
+      "Controllers": [
+        "Keypad",
+        "Encoder"
+      ],
+      "SupportedInMultiActions": false,
+      "PropertyInspectorPath": "pi/nowplaying.html"
     },
     {
       "UUID": "io.github.opendeck-masterhub.clock",

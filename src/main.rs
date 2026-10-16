@@ -13,6 +13,7 @@ mod hub;
 mod i18n;
 mod images;
 mod input;
+mod nowplaying;
 mod overlay;
 mod render;
 mod sensors;
@@ -164,6 +165,7 @@ async fn dispatcher(mut rx: UnboundedReceiver<Msg>) {
                 let r = out
                     .register_device(id.clone(), kind.name().to_string(), rows, columns, encoders, 0)
                     .await;
+                nowplaying::refresh_device(&id);
                 // Komendy dla modułu idą w tle: zawieszony moduł nie może blokować zgłaszania
                 // kolejnych urządzeń ani zdarzeń.
                 background(move || {
@@ -220,7 +222,8 @@ fn image_worker(device: String, kind: Kind) {
         match images::to_jpeg(image.as_deref(), size) {
             Ok(jpeg) => {
                 gif::with_transition(&device, || {
-                    if !gif::is_playing(&device, position) {
+                    if !gif::is_playing(&device, position)
+                        && (kind != Kind::Dial || (!overlay::active(&device) && !overlay::has_direct(&device))) {
                         with_writer(&device, |dev| match kind {
                             Kind::Dial => hub::upload_dial_image(dev, &jpeg),
                             _ => hub::upload_key_image(dev, position, &jpeg),
@@ -418,9 +421,11 @@ async fn volume_poller() {
             if let Err(e) = sync_volume(out, false).await {
                 log::warn!("Odświeżanie głośności: {e}");
             }
-            for (context, image) in actions::clock_updates() {
-                if let Err(e) = out.set_image(context, Some(image), None).await {
-                    log::warn!("Zegar: {e}");
+            if let Ok(updates) = blocking(actions::clock_updates).await {
+                for (context, image) in updates {
+                    if let Err(e) = out.set_image(context, Some(image), None).await {
+                        log::warn!("Zegar: {e}");
+                    }
                 }
             }
             if actions::sensors_active() {
@@ -464,7 +469,20 @@ impl openaction::ActionEventHandler for ActionEventHandler {
                 actions::sensor_register(&event.context, &settings);
                 sync_sensors(out, false).await?;
             }
-            actions::CLOCK => actions::clock_register(&event.context, &event.device, &settings),
+            actions::CLOCK => {
+                if MODULES.lock().unwrap().get(&event.device).is_some_and(|m| m.kind == Kind::Dial) {
+                    let (device, context) = (event.device.clone(), event.context.clone());
+                    blocking(move || overlay::claim_direct(&device, &context)).await?;
+                }
+                actions::clock_register(&event.context, &event.device, &settings);
+            }
+            actions::NOW_PLAYING => {
+                if event.payload.controller == "Keypad" && MODULES.lock().unwrap().get(&event.device).is_some_and(|m| m.kind == Kind::Dial) {
+                    let (device, context) = (event.device.clone(), event.context.clone());
+                    blocking(move || overlay::claim_direct(&device, &context)).await?;
+                }
+                nowplaying::register(&event.context, &event.device, &event.payload.controller, &settings);
+            }
             _ => {}
         }
         Ok(())
@@ -482,6 +500,10 @@ impl openaction::ActionEventHandler for ActionEventHandler {
             actions::SENSOR => {
                 let list = blocking(actions::sensor_list_json).await?;
                 out.send_to_property_inspector(event.context, list).await?;
+            }
+            actions::NOW_PLAYING => {
+                let options = blocking(nowplaying::inspector_options_json).await?;
+                out.send_to_property_inspector(event.context, options).await?;
             }
             _ => {}
         }
@@ -503,7 +525,14 @@ impl openaction::ActionEventHandler for ActionEventHandler {
             actions::VOLUME => actions::volume_unregister(&event.context),
             actions::SENSOR => actions::sensor_unregister(&event.context),
             actions::CLOCK => {
-                if let Some(device) = actions::clock_unregister(&event.context) {
+                let context = event.context;
+                if let Some(device) = blocking(move || actions::clock_unregister(&context)).await? {
+                    out.rerender_images(device).await?;
+                }
+            }
+            actions::NOW_PLAYING => {
+                let context = event.context;
+                if let Some(device) = blocking(move || nowplaying::unregister(&context)).await? {
                     out.rerender_images(device).await?;
                 }
             }
@@ -512,6 +541,10 @@ impl openaction::ActionEventHandler for ActionEventHandler {
                 let device = event.device.clone();
                 // Czekamy na koniec wysyłanej klatki, zanim OpenDeck przyśle zwykłe ikony.
                 if blocking(move || actions::gif_stop(&device, c.row, c.column)).await? {
+                    if overlay::has_direct(&event.device) {
+                        let device = event.device.clone();
+                        background(move || overlay::refresh_direct(&device));
+                    }
                     // Klawisz wraca do zwykłych obrazów z OpenDecka.
                     out.rerender_images(event.device).await?;
                 }
@@ -540,6 +573,7 @@ impl openaction::ActionEventHandler for ActionEventHandler {
                 sync_sensors(out, false).await?;
             }
             actions::CLOCK => actions::clock_register(&event.context, &event.device, &settings),
+            actions::NOW_PLAYING => nowplaying::update(&event.context, &settings),
             _ => {}
         }
         Ok(())
@@ -566,12 +600,14 @@ impl openaction::ActionEventHandler for ActionEventHandler {
                 // Wyciszenie z zegara – odświeżamy też tytuły akcji Głośność.
                 sync_volume(out, false).await?;
             }
+            actions::NOW_PLAYING => nowplaying::press(&event.context),
             _ => {}
         }
         Ok(())
     }
 
     async fn dial_down(&self, event: DialPressEvent, out: &mut OutboundEventManager) -> EventHandlerResult {
+        if event.action == actions::NOW_PLAYING { nowplaying::press(&event.context); }
         if event.action == actions::VOLUME {
             let settings = event.payload.settings;
             blocking(move || actions::volume_toggle_mute(&settings)).await?;
@@ -581,6 +617,7 @@ impl openaction::ActionEventHandler for ActionEventHandler {
     }
 
     async fn dial_rotate(&self, event: DialRotateEvent, out: &mut OutboundEventManager) -> EventHandlerResult {
+        if event.action == actions::NOW_PLAYING { nowplaying::rotate(&event.context, event.payload.ticks); }
         if event.action == actions::VOLUME {
             let (device, position) = (event.device, event.payload.coordinates.column);
             let (ticks, settings) = (event.payload.ticks, event.payload.settings);

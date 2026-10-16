@@ -14,6 +14,7 @@ pub const VOLUME: &str = "io.github.opendeck-masterhub.volume";
 pub const GIF: &str = "io.github.opendeck-masterhub.gif";
 pub const SENSOR: &str = "io.github.opendeck-masterhub.sensor";
 pub const CLOCK: &str = "io.github.opendeck-masterhub.clock";
+pub const NOW_PLAYING: &str = "io.github.opendeck-masterhub.nowplaying";
 
 // --- Zegar -------------------------------------------------------------------------------------
 
@@ -77,7 +78,7 @@ pub fn clock_register(context: &str, device: &str, settings: &serde_json::Value)
 /// Zwraca urządzenie pokrętła, jeśli zegar był na nim (trzeba wtedy przywrócić obraz OpenDecka).
 pub fn clock_unregister(context: &str) -> Option<String> {
     let dial = CLOCK_INSTANCES.lock().unwrap().remove(context).and_then(|c| c.dial);
-    dial.filter(|d| crate::overlay::clear_direct(d))
+    dial.filter(|d| crate::overlay::clear_direct_owned(d, context))
 }
 
 /// Bieżąca godzina ("14:05" albo "14:05:09") i data ("czw, 9 paź").
@@ -118,7 +119,7 @@ pub fn clock_updates() -> Vec<(String, String)> {
             // Na pokrętle wysyłamy obraz 240×240 bezpośrednio – OpenDeck przeskalowałby go
             // do 144×144 i z powrotem, co rozmywa drobny tekst.
             if let Some(device) = &c.dial {
-                crate::overlay::set_direct(device, img.clone());
+                crate::overlay::set_direct_owned(device, context, img.clone());
             }
             out.push((context.clone(), crate::render::png_data_url(&img)));
         }

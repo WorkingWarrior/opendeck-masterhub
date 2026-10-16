@@ -31,6 +31,13 @@ Actions in the **MasterHUB** category:
   15xKey module or the same GIF on every key.
 - **Clock** – time and date, e.g. on the dial's round screen. Pressing it can open
   a file / program / URL, send a keyboard shortcut or mute the system / microphone / focused app.
+- **Now Playing** (Linux) – MPRIS track, artwork and progress on the round dial screen,
+  or compact artwork on a 15xKey key. Press to play/pause; rotate to seek or adjust the
+  player's own volume. On 1xDial, assign it **separately** to the Keypad for the screen
+  and press, and to the Encoder for rotation; assigning either does not assign the other.
+  Auto chooses the lexicographically first playing MPRIS service, then the first available
+  service. A specific service can be selected in the action settings. With no matching
+  player the screen shows a placeholder and controls do nothing.
 - **Sensor** – temperatures, load, power, fans etc. from
   [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor).
   On Windows also **FPS and frame time of the focused window** from RivaTuner Statistics Server
@@ -89,6 +96,29 @@ is handy too.
 Keyboard shortcuts work on X11 and natively on Wayland (Hyprland, Sway, KDE Plasma). On GNOME,
 a fallback via `ydotool` is available (requires `ydotoold` daemon and `/dev/uinput` permissions). OpenDeck from Flatpak
 is supported – the plugin runs host programs through `flatpak-spawn --host`.
+
+**Now Playing on Linux** uses the native session D-Bus. KDE Plasma/Wayland needs no
+keyboard injection for this action, but the media app must expose
+`org.mpris.MediaPlayer2.*` on the same user session bus. When OpenDeck runs as a Flatpak,
+the sandbox may hide other players; check `flatpak info --show-permissions
+me.amankhanna.opendeck` and, if necessary, grant only MPRIS access with
+`flatpak override --user --talk-name=org.mpris.MediaPlayer2.* me.amankhanna.opendeck`,
+then restart OpenDeck. The ID may differ for another build. Flatpak also limits
+local artwork paths; a `file://` URL that is invisible inside its sandbox falls back to
+the music icon. HTTP(S) artwork needs network access. See the
+[Flatpak session-bus permissions](https://docs.flatpak.org/en/latest/sandbox-permissions.html)
+and [MPRIS specification](https://specifications.freedesktop.org/mpris/latest/).
+Windows and macOS builds keep the action visible but do not provide an MPRIS backend.
+
+To check the action on hardware, build/package and install the updated plugin, restart
+OpenDeck, then assign **Now Playing** to the 1xDial Keypad and Encoder separately.
+Start an MPRIS player (for example a Chromium media tab), check artwork/title/progress,
+pause and resume with the dial press, and turn the dial in both rotation modes. Repeat
+with a 15xKey key. In the settings select a specific player, then close it, switch
+profiles, and rotate a different action that shows the volume overlay; the old artwork
+must not return and the widget must reappear after the overlay. Check
+`masterhub.log` for D-Bus or artwork errors. This repository change has not been
+verified on a physical MasterHUB.
 
 ### macOS (11+, Apple Silicon and Intel)
 

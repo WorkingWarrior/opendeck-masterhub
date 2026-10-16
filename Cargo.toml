@@ -10,6 +10,7 @@ base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "webp"] }
 imageproc = { version = "0.25", default-features = false }
+fontdb = { version = "0.23", default-features = false, features = ["fs", "fontconfig"] }
 log = "0.4"
 openaction = "1"
 serde = { version = "1", features = ["derive"] }
@@ -37,6 +38,9 @@ windows-sys = { version = "0.59", features = ["Win32_UI_Input_KeyboardAndMouse"]
 [target.'cfg(target_os = "linux")'.dependencies]
 hidapi = { version = "2", default-features = false, features = ["linux-native-basic-udev"] }
 enigo = { version = "0.6.1", default-features = false, features = ["x11rb", "wayland"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+futures-util = "0.3"
+url = "2"
 
 # macOS: tryb wsp????dzielony ??? plugin otwiera ka??dy modu?? dwa razy (odczyt i zapis).
 [target.'cfg(target_os = "macos")'.dependencies]

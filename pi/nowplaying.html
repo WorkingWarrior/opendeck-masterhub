@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="pl">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="stylesheet" href="pi.css" />
+		<script src="i18n.js"></script>
+		<script src="common.js"></script>
+		<script>
+			function onFormChange() {
+				const player = document.getElementById("player");
+				const saved = actionInfo?.payload?.settings?.player;
+				if (!player.value && saved) {
+					const option = document.createElement("option");
+					option.value = saved;
+					option.textContent = saved.replace(/^org\.mpris\.MediaPlayer2\./, "");
+					player.append(option);
+					player.value = saved;
+				}
+				const font = document.getElementById("fontFamily");
+				const savedFont = actionInfo?.payload?.settings?.fontFamily;
+				if (!font.value && savedFont) {
+					const option = document.createElement("option");
+					option.value = savedFont;
+					option.textContent = savedFont;
+					font.append(option);
+					font.value = savedFont;
+				}
+				const seek = document.getElementById("rotateMode").value === "seek";
+				document.getElementById("seek-row").classList.toggle("hidden", !seek);
+				document.getElementById("step-value").textContent = document.getElementById("seekStep").value + " s";
+			}
+			function onPluginMessage(payload) {
+				if (Array.isArray(payload.fonts)) {
+					const select = document.getElementById("fontFamily");
+					const selected = select.value || "auto";
+					select.querySelectorAll("option:not([value='auto'])").forEach(el => el.remove());
+					for (const font of payload.fonts) {
+						const option = document.createElement("option");
+						option.value = font;
+						option.textContent = font;
+						select.append(option);
+					}
+					if (selected !== "auto" && !payload.fonts.includes(selected)) {
+						const option = document.createElement("option");
+						option.value = selected;
+						option.textContent = selected + " (" + t("niedostępna", "unavailable") + ")";
+						select.append(option);
+					}
+					select.value = selected;
+				}
+				if (!Array.isArray(payload.players)) return;
+				const select = document.getElementById("player");
+				const selected = select.value;
+				select.querySelectorAll("option:not([value='auto'])").forEach(el => el.remove());
+				for (const player of payload.players) {
+					const option = document.createElement("option");
+					option.value = player;
+					option.textContent = player.replace(/^org\.mpris\.MediaPlayer2\./, "");
+					select.append(option);
+				}
+				if (selected !== "auto" && !payload.players.includes(selected)) {
+					const option = document.createElement("option");
+					option.value = selected;
+					option.textContent = selected.replace(/^org\.mpris\.MediaPlayer2\./, "") + " (" + t("niedostępny", "unavailable") + ")";
+					select.append(option);
+				}
+				select.value = selected;
+			}
+		</script>
+	</head>
+	<body>
+		<div class="row">
+			<label for="player" data-en="Player">Odtwarzacz</label>
+			<select id="player" data-key="player"><option value="auto" data-en="Auto (playing first)">Auto (preferuj grający)</option></select>
+		</div>
+		<div class="row">
+			<label for="rotateMode" data-en="Rotation">Obrót</label>
+			<select id="rotateMode" data-key="rotateMode">
+				<option value="seek" data-en="Seek">Przewijanie</option>
+				<option value="volume" data-en="Player volume">Głośność odtwarzacza</option>
+			</select>
+		</div>
+		<div class="row" id="seek-row">
+			<label for="seekStep" data-en="Seek step">Krok przewijania</label>
+			<input id="seekStep" data-key="seekStep" type="range" min="1" max="60" value="5" />
+			<span class="value" id="step-value"></span>
+		</div>
+		<div class="row">
+			<label for="showArt" data-en="Artwork">Okładka</label>
+			<label><input id="showArt" data-key="showArt" type="checkbox" checked /> <span data-en="show artwork">pokazuj okładkę</span></label>
+		</div>
+		<div class="row">
+			<label for="showProgress" data-en="Progress">Postęp</label>
+			<label><input id="showProgress" data-key="showProgress" type="checkbox" checked /> <span data-en="show progress ring">pokazuj pierścień postępu</span></label>
+		</div>
+		<div class="row">
+			<label for="showArtist" data-en="Artist">Wykonawca</label>
+			<label><input id="showArtist" data-key="showArtist" type="checkbox" checked /> <span data-en="show artist">pokazuj wykonawcę</span></label>
+		</div>
+		<div class="row">
+			<label for="fontFamily" data-en="Font">Czcionka</label>
+			<select id="fontFamily" data-key="fontFamily"><option value="auto" data-en="Default">Domyślna</option></select>
+		</div>
+		<div class="row">
+			<label for="accentColor" data-en="Accent color">Kolor akcentu</label>
+			<input id="accentColor" data-key="accentColor" type="color" value="#a0dc30" />
+		</div>
+		<p class="hint" data-en="On 1xDial assign this action separately to the Keypad (screen/press) and Encoder (rotation). MPRIS needs access to the session D-Bus.">Na 1xDial przypisz akcję osobno do Keypad (ekran/wciśnięcie) i Encoder (obrót). MPRIS wymaga dostępu do sesyjnego D-Bus.</p>
+	</body>
+</html>
